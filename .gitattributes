@@ -1,0 +1,8 @@
+# Keep POSIX shell scripts and YAML LF-only regardless of the host OS,
+# so `curl ... | sh` never receives CRLF line endings.
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# PowerShell scripts use CRLF on Windows.
+*.ps1  text eol=crlf
