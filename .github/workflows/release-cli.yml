@@ -1,0 +1,100 @@
+# release-cli — build the Scrolls CLI single-file binaries and publish them here.
+#
+# The CLI source lives in the PRIVATE repo `absilutely/scrolls` (a Bun monorepo,
+# CLI at packages/cli). This workflow clones that repo with a READ-ONLY deploy
+# key (repo secret `SCROLLS_READ_KEY` — the private half; its public half is a
+# read-only deploy key on absilutely/scrolls), cross-compiles the CLI for every
+# supported platform with `bun build --compile`, and attaches the binaries to a
+# GitHub Release IN THIS repo.
+#
+# Asset names are chosen to MATCH exactly what install.sh / install.ps1 fetch
+# from `releases/latest/download/`:
+#   install.sh  -> scrolls-<os>-<arch>   (os: linux|darwin, arch: x64|arm64)
+#   install.ps1 -> scrolls-windows-x64.exe
+#
+# Publishing stays in-repo, so the default GITHUB_TOKEN has enough scope.
+
+name: release-cli
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create (e.g. cli-v0.1.0)"
+        required: true
+        default: cli-v0.1.0
+  push:
+    tags:
+      - "cli-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build CLI binaries and publish release
+    runs-on: ubuntu-latest
+    steps:
+      # Resolve the release tag from either the dispatch input or the pushed tag.
+      - name: Resolve release tag
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Load the read-only deploy key so we can clone the private source repo.
+      - name: Start ssh-agent with the read-only deploy key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SCROLLS_READ_KEY }}
+
+      # Clone the private source. The deploy key is read-only and scoped to this repo.
+      - name: Clone scrolls source
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+          git clone --depth 1 git@github.com:absilutely/scrolls.git src
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        working-directory: src
+        run: bun install --frozen-lockfile
+
+      # Cross-compile the CLI (entry: packages/cli/src/cli.ts) into standalone
+      # binaries for each target. Outputs are named to match the installers.
+      - name: Build CLI single-file binaries
+        working-directory: src
+        run: |
+          set -eu
+          ENTRY="packages/cli/src/cli.ts"
+          OUT="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$OUT"
+          build() {
+            target="$1"; name="$2"
+            echo "==> building $name (target=$target)"
+            bun build "$ENTRY" --compile --target="$target" --outfile "$OUT/$name"
+          }
+          build bun-linux-x64    scrolls-linux-x64
+          build bun-darwin-arm64 scrolls-darwin-arm64
+          build bun-darwin-x64   scrolls-darwin-x64
+          build bun-windows-x64  scrolls-windows-x64.exe
+
+      - name: List built artifacts
+        run: ls -lh dist
+
+      # Create/update the Release in THIS repo and upload the binaries.
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "Scrolls CLI ${{ steps.meta.outputs.tag }}"
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
