@@ -1,0 +1,58 @@
+# Publish-on-tag workflow for scrolls-releases.
+#
+# This is the PUBLISH step only. It does NOT build the CLI or desktop app —
+# those builds happen in the main `absilutely/scrolls` repo (or you upload a
+# `dist/` directory manually). When a `v*` tag is pushed, this workflow:
+#
+#   1. Checks out the tagged commit.
+#   2. Creates (or updates) a GitHub Release for that tag.
+#   3. Uploads every file found in `dist/` as a release asset.
+#
+# So the intended flow is: place your built artifacts in `dist/` on the commit
+# you tag, then `git push origin vX.Y.Z`. Expected asset names are documented
+# in README.md ("Releasing").
+
+name: release
+
+# Trigger on any tag that looks like a version, e.g. v0.1.0, v1.2.3.
+on:
+  push:
+    tags:
+      - "v*"
+
+# The release action needs write access to create the release + upload assets.
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish release
+    runs-on: ubuntu-latest
+    steps:
+      # Pull down the repo at the tagged commit (so any committed dist/ is present).
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Informational: list whatever we're about to publish. Won't fail the run
+      # if dist/ is empty — the release is still created (assets can be added later).
+      - name: List dist/ artifacts
+        run: |
+          if [ -d dist ] && [ -n "$(ls -A dist 2>/dev/null)" ]; then
+            echo "Found artifacts to upload:"
+            ls -lh dist
+          else
+            echo "::warning::No dist/ directory (or it is empty). Creating an empty release — upload assets later."
+          fi
+
+      # Create/update the GitHub Release for this tag and upload dist/* as assets.
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # The tag that triggered the run becomes the release tag/name.
+          generate_release_notes: true
+          # Glob of files to attach. Missing files are fine (fail_on_unmatched_files: false).
+          files: dist/*
+          fail_on_unmatched_files: false
+        env:
+          # Provided automatically by Actions; used to authenticate the release API call.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
